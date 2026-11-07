@@ -119,7 +119,10 @@ class Build:
                                                           os.environ.get('PATH', '')]))
 
     def unixnu_cmd(self, *arguments, logfile=None, out=None):
-        env = dict(self.env, UNIXNU_OUT=str(out or self.out))
+        selected_out = Path(out or self.out).resolve()
+        env = dict(self.env, UNIXNU_OUT=str(selected_out))
+        if out is not None:
+            env['UNIXNU_DEVICE'] = str(selected_out / 'device')
         return run([self.unixnu / 'unixnu', *arguments], cwd=self.unixnu, env=env, logfile=logfile)
 
     def script(self, name, *arguments, logfile=None, check=True):
