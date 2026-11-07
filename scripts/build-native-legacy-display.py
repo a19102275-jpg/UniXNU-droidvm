@@ -297,6 +297,22 @@ run(policy_cmd,cwd=er['directory'])
 export_source=ROOT/'kits/droidvm/DroidVMFileExport.c'
 export_obj=OUT/'DroidVMFileExport.o'
 run([str(export_source) if arg==str(policy_source) else str(export_obj) if arg==str(policy_obj) else arg for arg in policy_cmd],cwd=er['directory'])
+# The VM page diagnostic uses the vm_dyld_pager compile environment.
+page_info_source=ROOT/'kits/droidvm/DroidVMPageInfo.c'
+page_info_obj=OUT/'DroidVMPageInfo.o'
+page_record=json.loads((ROOT/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/vm_dyld_pager.o.json').read_text().strip().rstrip(','))
+page_cmd=[];page_args=page_record['arguments'];j=0
+while j<len(page_args):
+    value=page_args[j]
+    if value==page_record['file']:page_cmd.append(str(page_info_source))
+    elif value in ('-o','-MF','-MT','-MJ'):
+        if value=='-o':page_cmd+=['-o',str(page_info_obj)]
+        j+=1
+    elif value=='-Xclang' and j+1<len(page_args) and page_args[j+1].startswith('-W'):j+=1
+    elif not value.startswith('-W'):page_cmd.append(value)
+    j+=1
+page_cmd+=['-mgeneral-regs-only','-I',str(ROOT/'.cache/xnu-work/osfmk')]
+run(page_cmd,cwd=page_record['directory'])
 # The calendar clock from crosvm's PL030 (droidvm_rtc_set_calendar, called by the launchd override writer), in the same header universe.
 clock_source=ROOT/'kits/droidvm/DroidVMClock.c'
 clock_obj=OUT/'DroidVMClock.o'
@@ -349,6 +365,11 @@ def stage_late(obj,stem):
     require(code(obj.read_bytes(),macho(obj.read_bytes()))==code(staged.read_bytes(),macho(staged.read_bytes())),
             f'{stem} instructions unchanged by late init staging')
     return staged
+# The SPU user client needs a staged OSMetaClass initializer.
+sensor_source=ROOT/'kits/droidvm/DroidVMSensorProcessor.cpp'
+sensor_obj=OUT/'DroidVMSensorProcessor.o'
+run(iokit_command(sensor_source,sensor_obj),cwd=iokit_record['directory'])
+sensor_late=stage_late(sensor_obj,'DroidVMSensorProcessor')
 IONET_TAG='IONetworkingFamily-177';IONET_COMMIT='36dbe56b09729a07e9fa0272524e98718394c9f0'
 ionet=ROOT/'build/ionetworking-family';ionet_src=ionet/'src';ionet_include=ionet/'include';(ionet/'obj').mkdir(parents=True,exist_ok=True)
 if not (ionet_src/'.git').exists():
@@ -403,40 +424,16 @@ hid_dir=ROOT/'build/sheng-hid-input'
 # (native_keyboard_set_sink: kits/droidvm/DroidVMVirtioInput.c, the app's virtio keyboard): NativeHidInput sends only the Home button
 # and touch, so no key typed on the phone reached iOS. Compiled from a staged copy with build-arm-driver.py's own command, after the
 # HID build's audit: only static members are added, its vtable and original bindings stay as audited.
-hid_original=ROOT/'drivers/NativeHidInput/NativeHidInput.cpp';hid_text=hid_original.read_text()
-hid_keyboard=('    // DroidVM (build-native-legacy-display.py): the keyboard driver calls keyboardNotify with each boot keyboard state (modifier\n'
-              '    // byte, reserved byte, six usages), sent as report 1.\n'
-              '    static void keyboardNotify(void *context,const uint8_t *keys) {\n'
-              '        NativeHidInput *self=static_cast<NativeHidInput *>(context);\n'
-              '        if(self && self->inputLoop && keys)self->inputLoop->runAction(&NativeHidInput::keyboardAction,self,const_cast<uint8_t *>(keys));\n'
-              '    }\n'
-              '    static IOReturn keyboardAction(OSObject *owner,void *keys,void *,void *,void *) {\n'
-              '        NativeHidInput *self=OSDynamicCast(NativeHidInput,owner);if(!self)return kIOReturnSuccess;\n'
-              '        if(!self->hasEventDriverCached())return kIOReturnNotReady;\n'
-              '        unsigned char report[9]={1};\n'
-              '        memcpy(report+1,keys,8);\n'
-              '        IOBufferMemoryDescriptor *buffer=IOBufferMemoryDescriptor::withBytes(report,sizeof(report),kIODirectionNone);\n'
-              '        IOReturn result=buffer?self->handleReport(buffer,0,0):kIOReturnNoMemory;\n'
-              '        OSSafeReleaseNULL(buffer);\n'
-              '        return result;\n'
-              '    }\n')
-for anchor,replacement in (
-        ('extern "C" void native_buttons_set_sink(void (*)(void *, uint32_t), void *) __attribute__((weak_import));\n',
-         'extern "C" void native_buttons_set_sink(void (*)(void *, uint32_t), void *) __attribute__((weak_import));\n'
-         'extern "C" void native_keyboard_set_sink(void (*)(void *, const uint8_t *), void *);\n'),
-        ('    bool hasEventDriverCached() {\n',hid_keyboard+'    bool hasEventDriverCached() {\n'),
-        ('        if(!touchOnly && &native_buttons_set_sink)native_buttons_set_sink(&NativeHidInput::buttonsNotify,this);\n',
-         '        if(!touchOnly && &native_buttons_set_sink)native_buttons_set_sink(&NativeHidInput::buttonsNotify,this);\n'
-         '        if(!touchOnly)native_keyboard_set_sink(&NativeHidInput::keyboardNotify,this);\n'),
-        ('        if(!touchOnly && &native_buttons_set_sink)native_buttons_set_sink(nullptr,nullptr);\n',
-         '        if(!touchOnly && &native_buttons_set_sink)native_buttons_set_sink(nullptr,nullptr);\n'
-         '        if(!touchOnly)native_keyboard_set_sink(nullptr,nullptr);\n')):
-    require(hid_text.count(anchor)==1,'NativeHidInput.cpp no longer has exactly one '+anchor.strip())
-    hid_text=hid_text.replace(anchor,replacement)
-# The board's motion sensors as HID devices, in the same translation unit so the same late initializer registers their metaclass.
-hid_text+='\n'+(ROOT/'kits/droidvm/DroidVMMotionHid.inc').read_text()
-# the same file name: the late static initializer is named after it (__GLOBAL__sub_I_NativeHidInput.cpp)
-hid_staged=hid_dir/'droidvm'/'NativeHidInput.cpp';hid_staged.parent.mkdir(exist_ok=True);hid_staged.write_text(hid_text)
+hid_original=ROOT/'drivers/NativeHidInput/NativeHidInput.cpp'
+# Reuse the complete DroidVM keyboard, pen and motion HID implementation.
+import importlib.util
+hid_helper_path=ROOT/'scripts/droidvm-hid-stage.py'
+hid_spec=importlib.util.spec_from_file_location('droidvm_hid_stage',hid_helper_path)
+hid_helper=importlib.util.module_from_spec(hid_spec)
+hid_spec.loader.exec_module(hid_helper)
+hid_helper.ROOT=ROOT
+hid_helper.OUT=hid_dir
+hid_staged=hid_helper.stage_hid(hid_original)
 hid_command=json.loads((hid_dir/'compile-command.json').read_text())
 require(hid_command.count(str(hid_original))==1,'build-arm-driver.py compiles NativeHidInput.cpp once')
 run([str(hid_staged) if a==str(hid_original) else a for a in hid_command],cwd=r['directory'])
@@ -502,12 +499,12 @@ run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func',
 require(code((keyevents/'NativeKeyStoreEvents.o').read_bytes(),macho((keyevents/'NativeKeyStoreEvents.o').read_bytes()))==
         code(keyevents_late.read_bytes(),macho(keyevents_late.read_bytes())),'Owned event-service instructions unchanged by late init staging')
 run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',OUT/'LegacyDisplayProbe.o',hid_obj,keystore_obj,process_obj,trace_obj,
-     hid_dir/'NativeHidInput.late.o',hid_dir/'hid-original-bindings.o',keyevents_late,stub_obj,policy_obj,clock_obj,export_obj,store_obj,input_obj,motion_obj,bootargs_obj,net_obj,netif_obj,snd_obj,media_obj,
+     hid_dir/'NativeHidInput.late.o',hid_dir/'hid-original-bindings.o',keyevents_late,stub_obj,policy_obj,clock_obj,export_obj,page_info_obj,sensor_late,store_obj,input_obj,motion_obj,bootargs_obj,net_obj,netif_obj,snd_obj,media_obj,
      audio_late,battery_late,ethernet_late,*ionet_objects,*gpu_objects,*virtio_gpu_objects])
 sources=[ROOT/'drivers/GopFramebuffer/NativeLegacyDisplay.cpp',
          ROOT/'drivers/GopFramebuffer/NativeLegacyRequest.h',source,hid_source,keystore_source,process_source,trace_source,ROOT/'kits/droidvm/BootUiTraceCore.h',ROOT/'kits/droidvm/BootUiTraceDetails.h',
          ROOT/'drivers/NativeHidInput/NativeHidInput.cpp',ROOT/'scripts/build-native-hid-input.py',
-         ROOT/'drivers/NativeKeyStoreEvents/NativeKeyStoreEvents.cpp',stub_source,policy_source,clock_source,export_source,store_source,input_source,motion_source,bootargs_source,net_source,netif_source,snd_source,media_source,audio_source,battery_source,
+         ROOT/'drivers/NativeKeyStoreEvents/NativeKeyStoreEvents.cpp',stub_source,policy_source,clock_source,export_source,page_info_source,sensor_source,store_source,input_source,motion_source,bootargs_source,net_source,netif_source,snd_source,media_source,audio_source,battery_source,
          ethernet_source,*ionet_sources,*gpu_sources,*virtio_gpu_sources,ROOT/'kits/droidvm/DroidVMVirtioGpu.h']
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeGOPPresenter'],text=True),end='')
 gop=ROOT/'build/native-gop-presenter';gop_late=gop/'NativeGOPPresenter.late.o'

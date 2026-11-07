@@ -318,3 +318,6 @@ extern "C" void sheng_gpu_power_probe(void)
     thread_t thread = nullptr;
     if (kernel_thread_start(publishThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
+
+// Compatibility fallback: native Adreno fence synchronization unavailable.
+extern "C" bool native_adreno_fences(uint32_t *, uint32_t *) {return false;}
