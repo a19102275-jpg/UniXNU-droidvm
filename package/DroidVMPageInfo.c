@@ -7,17 +7,17 @@
 // Built with vm_dyld_pager.o's flags (osfmk); every read is unlocked: a diagnostic of pages that stay as they are.
 #include <mach/mach_types.h>
 #include <mach/memory_object_types.h>
-#include <vm/vm_protos_internal.h>
-#include <vm/vm_page_internal.h>
-#include <vm/vm_object_internal.h>
+#include <vm/vm_protos.h>
+#include <vm/vm_page.h>
+#include <vm/vm_object.h>
 
 extern vm_offset_t vm_kernel_addrperm;
 
 static size_t
 droidvm_page_object(vm_object_t object, const char *what, char *out, size_t size)
 {
-	size_t at = (size_t)snprintf(out, size, "%s %p: refs %u resident %u size %#llx paging %u activity %u created %d initialized %d "
-	    "ready %d internal %d alive %d terminating %d shadow %p\n", what, object, os_ref_get_count_raw(&object->ref_count),
+	size_t at = (size_t)snprintf(out, size, "%s %p: refs %d resident %u size %#llx paging %u activity %u created %d initialized %d "
+	    "ready %d internal %d alive %d terminating %d shadow %p\n", what, object, object->ref_count,
 	    object->resident_page_count, (unsigned long long)object->vo_size, object->paging_in_progress, object->activity_in_progress,
 	    object->pager_created, object->pager_initialized, object->pager_ready, object->internal, object->alive,
 	    object->terminating, object->shadow);
@@ -41,7 +41,7 @@ droidvm_page_info(uint64_t address, bool permuted, char *out, size_t size)
 		address -= vm_kernel_addrperm;
 	}
 	vm_page_t m = (vm_page_t)address;
-	if (!vm_page_in_array(m)) {
+	if ((uintptr_t)m < (uintptr_t)vm_pages || (uintptr_t)m >= (uintptr_t)&vm_pages[vm_pages_count] || ((uintptr_t)m - (uintptr_t)vm_pages) % sizeof(*m) != 0) {
 		return (size_t)snprintf(out, size, "%#llx: not in the pages array\n", (unsigned long long)address);
 	}
 	size_t at = (size_t)snprintf(out, size, "page %p: offset %#llx queue %d busy %d wanted %d absent %d error %d clustered %d "

@@ -1,0 +1,48 @@
+
+name: Trigger UniXNU macOS build
+
+on:
+  push:
+    branches:
+      - wip/hackintosh
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger main repository build
+        env:
+          GH_TOKEN: ${{ secrets.UNIXNU_CI_TRIGGER_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || {
+            echo "::error::UNIXNU_CI_TRIGGER_TOKEN is missing"
+            exit 1
+          }
+
+          payload=$(jq -n \
+            --arg sha "$COMMIT_SHA" \
+            '{
+              ref: "wip/droidvm",
+              inputs: {
+                device_repository: "a19102275-jpg/UniXNU-droidvm",
+                device_ref: $sha,
+                defconfig: "droidvm_defconfig",
+                steps: "kernel",
+                xcode: "26.6"
+              }
+            }')
+
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --url "https://api.github.com/repos/a19102275-jpg/UniXNU/actions/workflows/macos.yml/dispatches" \
+            --data "$payload"
+
+          echo "Triggered UniXNU build for device commit $COMMIT_SHA"
