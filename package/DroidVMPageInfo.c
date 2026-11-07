@@ -12,6 +12,7 @@
 #include <vm/vm_object.h>
 
 extern vm_offset_t vm_kernel_addrperm;
+extern unsigned int vm_pages_count;
 
 static size_t
 droidvm_page_object(vm_object_t object, const char *what, char *out, size_t size)
